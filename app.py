@@ -60,12 +60,7 @@ div[data-testid="stStatusWidget"]     { display: none !important; }
 section[data-testid="stSidebar"]      { display: none !important; }
 
 .stApp, [data-testid="stAppViewContainer"] {
-  background-color: #F4F0EA !important;
-  background-image: 
-    linear-gradient(rgba(17, 17, 17, 0.02) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(17, 17, 17, 0.02) 1px, transparent 1px),
-    radial-gradient(circle, #C8C2B8 1px, transparent 1px) !important;
-  background-size: 80px 80px, 80px 80px, 20px 20px !important;
+  background: transparent !important;
   font-family: var(--font-sans) !important;
 }
 .main .block-container {
@@ -75,7 +70,7 @@ section[data-testid="stSidebar"]      { display: none !important; }
 }
 
 html, body, h1, h2, h3, h4, h5, h6,
-p, span, div, label, input, textarea, button, option, select {
+p, label, input, textarea, button, option, select {
   font-family: var(--font-sans) !important;
   color: var(--text-1) !important;
 }
@@ -161,21 +156,6 @@ label[data-testid="stWidgetLabel"] > div > p {
   letter-spacing: 0.14em;
   text-transform: uppercase;
   color: #4ADE80 !important;
-}
-
-.cb-nav-wrap {
-  display: flex;
-  justify-content: center;
-  align-items: center;
-  gap: 0;
-  background: var(--surface);
-  border: 2px solid #111111 !important;
-  border-radius: 14px;
-  padding: 6px;
-  max-width: 100% !important;
-  margin: 0 auto 2rem;
-  box-shadow: 4px 4px 0px #111111 !important;
-  animation: fadeUp 0.6s ease 0.15s both;
 }
 
 div.stButton > button {
@@ -333,43 +313,88 @@ div[data-testid="stMetricValue"] {
   box-shadow: 3px 3px 0px #111111 !important;
 }
 
-.cb-decor-sparkle {
-  position: absolute;
-  font-size: 3rem;
-  opacity: 0.08;
-  z-index: 0;
-  pointer-events: none;
-  animation: floatDecor 8s ease-in-out infinite;
-  user-select: none;
-}
-.cb-decor-1 { top: 12%; left: 4%; animation-delay: 0s; }
-.cb-decor-2 { top: 62%; left: 6%; animation-delay: 2s; font-size: 4rem; }
-.cb-decor-3 { top: 18%; right: 4%; animation-delay: 4s; }
-.cb-decor-4 { top: 68%; right: 5%; animation-delay: 6s; font-size: 3.5rem; }
-
-@keyframes floatDecor {
-  0%, 100% { transform: translateY(0) rotate(0deg); }
-  50%       { transform: translateY(-15px) rotate(8deg); }
-}
-
 ::-webkit-scrollbar { width: 5px; height: 5px; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: #D5D0C9; border-radius: 10px; }
-::-webkit-scrollbar-thumb:hover { background: #B0AAA0; }
+::-webkit-scrollbar-thumb:hover { background: var(--bg-cream); }
 </style>
+""",unsafe_allow_html=True)
 
-<div class="cb-decor-sparkle cb-decor-1">✨</div>
-<div class="cb-decor-sparkle cb-decor-2">🎬</div>
-<div class="cb-decor-sparkle cb-decor-3">💡</div>
-<div class="cb-decor-sparkle cb-decor-4">📈</div>
-""", unsafe_allow_html=True)
+st.markdown(
+    """
+    <div class="custom-theme-bg">
+      <div class="cb-dot-grid"></div>
+      <div class="cb-pillars">
+        <div class="cb-pillar p-blue"></div>
+        <div class="cb-pillar p-purple"></div>
+        <div class="cb-pillar p-pink"></div>
+        <div class="cb-pillar p-yellow"></div>
+        <div class="cb-pillar p-pink"></div>
+        <div class="cb-pillar p-purple"></div>
+        <div class="cb-pillar p-blue"></div>
+      </div>
+    </div>
+    
+    <style>
+      .custom-theme-bg {
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100vw;
+        height: 100vh;
+        background-color: #f7f4ed;
+        z-index: -10;
+        overflow: hidden;
+        pointer-events: none;
+      }
+      .cb-dot-grid {
+        position: absolute;
+        inset: 0;
+        background-image: radial-gradient(#e1ded7 1.5px, transparent 1.5px);
+        background-size: 24px 24px;
+        opacity: 0.8;
+        z-index: 1;
+      }
+      .cb-pillars {
+        position: absolute;
+        bottom: 0;
+        left: 15vw;
+        right: 15vw;
+        height: 100%;
+        display: flex;
+        z-index: 2;
+        filter: blur(65px);
+        opacity: 0.6;
+      }
+      .cb-pillar {
+        flex: 1;
+        height: 100%;
+        position: relative;
+      }
+      .cb-pillar::after {
+        content: '';
+        position: absolute;
+        bottom: 0;
+        left: 0;
+        width: 100%;
+        height: 80%;
+        background: linear-gradient(to top, var(--pillar-glow) 0%, transparent 100%);
+      }
+      .p-blue   { --pillar-glow: #90caf9; }
+      .p-purple { --pillar-glow: #b39ddb; }
+      .p-pink   { --pillar-glow: #ff758f; }
+      .p-yellow { --pillar-glow: #ffc75f; }
+    </style>
+    """,
+    unsafe_allow_html=True
+)
 
 h_left, h_center, h_right = st.columns([0.8, 3.4, 0.8])
 with h_center:
     st.markdown("""
     <div class="cb-hero" style="text-align: center; padding: 2rem 0 1.2rem;">
       <div class="cb-wordmark">CreatorBuddy</div>
-      <p class="cb-tagline" style="margin-top: 8px;">Autonomous AI Viral Reel Agent &nbsp;·&nbsp; Powered by Gemini 2.5</p>
+      <p class="cb-tagline" style="margin-top: 8px;">Autonomous Video & Social Content Production Engine</p>
       <div class="cb-live-badge" style="margin-top: 4px;">
         <span class="cb-live-dot"></span>
         <span class="cb-live-text">Live Connection</span>
@@ -383,7 +408,6 @@ with h_right:
     btn_history = st.button(history_label, key="nav_history", use_container_width=True)
     st.markdown('</div>', unsafe_allow_html=True)
 
-st.markdown('<div class="cb-nav-wrap" id="cb-nav">', unsafe_allow_html=True)
 c1, c2, c3 = st.columns(3)
 with c1:
     btn_trends = st.button(
@@ -406,7 +430,6 @@ with c3:
         use_container_width=True,
         type="primary" if st.session_state["active_tab"] == "analytics" else "secondary"
     )
-st.markdown('</div>', unsafe_allow_html=True)
 
 if btn_trends:
     st.session_state["active_tab"] = "trends"
@@ -421,7 +444,7 @@ elif btn_history:
     st.session_state["show_history"] = not st.session_state["show_history"]
     st.rerun()
 
-st.markdown("<div class='cb-divider'></div>", unsafe_allow_html=True)
+st.markdown("<div style='height: 1.2rem;'></div>", unsafe_allow_html=True)
 
 if st.session_state["show_history"]:
     def fetch_generation_history():
