@@ -10,7 +10,7 @@ from typing import List, Any
 import edge_tts
 
 try:
-    from moviepy import AudioFileClip, VideoFileClip, ImageClip, concatenate_videoclips
+    from moviepy import AudioFileClip, VideoFileClip, ImageClip, concatenate_videoclips, TextClip, CompositeVideoClip
 except ImportError as err:
     raise ImportError("Failed to import MoviePy v2. Run: pip install moviepy>=2.0.0") from err
 
@@ -77,8 +77,23 @@ class MediaProductionFactory:
             except Exception:
                 pass
 
-        communicate = edge_tts.Communicate(cleaned_text, voice)
-        await communicate.save(output_path)
+        communicate = edge_tts.Communicate(cleaned_text, voice, boundary="WordBoundary")
+        submaker = edge_tts.SubMaker()
+        with open(output_path, "wb") as f:
+            async for chunk in communicate.stream():
+                if chunk["type"] == "audio":
+                    f.write(chunk["data"])
+                elif chunk["type"] == "WordBoundary":
+                    submaker.feed(chunk)
+
+        srt_path = "data/cache/subtitles.srt"
+        os.makedirs(os.path.dirname(srt_path), exist_ok=True)
+        try:
+            with open(srt_path, "w", encoding="utf-8") as sf:
+                sf.write(submaker.get_srt())
+        except Exception:
+            pass
+
         return output_path
 
     def simplify_pexels_query(self, query: str) -> str:
@@ -200,10 +215,81 @@ class MediaProductionFactory:
         
         return np.array(img)
 
+    @staticmethod
+    def group_words_into_phrases(word_cues: List[tuple], max_words: int = 3, max_pause: float = 0.35) -> List[tuple]:
+        if not word_cues:
+            return []
+        phrases = []
+        current_phrase_words = []
+        phrase_start = None
+        last_end = None
+        
+        for start, end, word in word_cues:
+            should_split = False
+            if len(current_phrase_words) >= max_words:
+                should_split = True
+            elif last_end is not None and (start - last_end) > max_pause:
+                should_split = True
+                
+            if should_split and current_phrase_words:
+                phrase_text = " ".join(current_phrase_words).upper()
+                phrases.append((phrase_start, last_end, phrase_text))
+                current_phrase_words = []
+                
+            if not current_phrase_words:
+                phrase_start = start
+                
+            current_phrase_words.append(word)
+            last_end = end
+            
+        if current_phrase_words:
+            phrase_text = " ".join(current_phrase_words).upper()
+            phrases.append((phrase_start, last_end, phrase_text))
+            
+        return phrases
+
+    @staticmethod
+    def parse_srt(srt_path: str) -> List[tuple]:
+        cues = []
+        if not os.path.exists(srt_path):
+            return cues
+        try:
+            with open(srt_path, "r", encoding="utf-8") as f:
+                content = f.read().strip()
+                
+            blocks = content.split("\n\n")
+            for block in blocks:
+                lines = [l.strip() for l in block.split("\n") if l.strip()]
+                if len(lines) >= 3:
+                    timing_line = ""
+                    text_lines = []
+                    for line in lines[1:]:
+                        if "-->" in line:
+                            timing_line = line
+                        else:
+                            text_lines.append(line)
+                    
+                    if timing_line:
+                        start_str, end_str = timing_line.split("-->")
+                        
+                        def to_sec(s):
+                            parts = s.strip().replace(",", ".").split(":")
+                            return float(parts[0]) * 3600 + float(parts[1]) * 60 + float(parts[2])
+                            
+                        start_t = to_sec(start_str)
+                        end_t = to_sec(end_str)
+                        text_clean = " ".join(text_lines).upper()
+                        cues.append((start_t, end_t, text_clean))
+        except Exception as e:
+            logger.error(f"Error parsing SRT: {e}")
+        return cues
+
     def assemble_reel_video(self, voice_path: str, visual_keywords: List[Any], output_mp4_path: str, niche: str = "AI") -> str:
         audio_clip = None
         final_video = None
         clips = []
+        text_clips = []
+        use_textclip_composite = False
         
         try:
             audio_clip = AudioFileClip(voice_path)
@@ -267,102 +353,148 @@ class MediaProductionFactory:
                 
             video_sequence = concatenate_videoclips(clips, method="compose")
             
-            timed_words = []
-            if timeline_segments:
-                max_seg_end = max(float(seg.get("end", 0.0)) for seg in timeline_segments) if timeline_segments else 30.0
-                scale = total_duration / max_seg_end if max_seg_end > 0 else 1.0
-                for seg in timeline_segments:
-                    seg_start = float(seg.get("start", 0.0)) * scale
-                    seg_end = float(seg.get("end", 0.0)) * scale
-                    txt = seg.get("voiceover_text", "")
-                    
-                    seg_words = [w.strip() for w in re.split(r'\s+', txt) if w.strip()]
-                    clean_words = [w.upper().replace('"', '').replace('.', '').replace(',', '').replace('?', '').replace('!', '') for w in seg_words if w]
-                    
-                    if not clean_words:
-                        continue
-                        
-                    seg_duration = seg_end - seg_start
-                    word_dur = seg_duration / len(clean_words)
-                    
-                    for idx, w_text in enumerate(clean_words):
-                        w_start = seg_start + (idx * word_dur)
-                        w_end = w_start + word_dur
-                        timed_words.append((w_start, w_end, w_text))
-            else:
-                raw_words = ["CREATE", "VIRAL", "CONTENT", "AUTONOMOUSLY", "WITH", "CREATORBUDDY"]
-                clean_words = [w.upper() for w in raw_words]
-                word_dur = total_duration / len(clean_words)
-                for idx, w_text in enumerate(clean_words):
-                    timed_words.append((idx * word_dur, (idx + 1) * word_dur, w_text))
+            srt_path = "data/cache/subtitles.srt"
+            raw_cues = self.parse_srt(srt_path)
+            timed_words = self.group_words_into_phrases(raw_cues, max_words=3, max_pause=0.35)
             
-            def draw_text_with_outline(draw_ctx, text, x, y, font, fill_color, outline_color=(17, 17, 17, 255), outline_width=3):
-                for dx in range(-outline_width, outline_width+1):
-                    for dy in range(-outline_width, outline_width+1):
-                        if dx != 0 or dy != 0:
-                            draw_ctx.text((x + dx, y + dy), text, fill=outline_color, font=font, anchor="mm")
-                draw_ctx.text((x, y), text, fill=fill_color, font=font, anchor="mm")
+            if not timed_words:
+                if timeline_segments:
+                    max_seg_end = max(float(seg.get("end", 0.0)) for seg in timeline_segments) if timeline_segments else 30.0
+                    scale = total_duration / max_seg_end if max_seg_end > 0 else 1.0
+                    for seg in timeline_segments:
+                        seg_start = float(seg.get("start", 0.0)) * scale
+                        seg_end = float(seg.get("end", 0.0)) * scale
+                        txt = seg.get("voiceover_text", "")
+                        
+                        seg_words = [w.strip() for w in re.split(r'\s+', txt) if w.strip()]
+                        clean_words = [w.upper().replace('"', '').replace('.', '').replace(',', '').replace('?', '').replace('!', '') for w in seg_words if w]
+                        
+                        if not clean_words:
+                            continue
+                            
+                        seg_duration = seg_end - seg_start
+                        word_dur = seg_duration / len(clean_words)
+                        
+                        for idx in range(0, len(clean_words), 3):
+                            chunk = clean_words[idx : idx + 3]
+                            chunk_text = " ".join(chunk)
+                            chunk_start = seg_start + (idx * word_dur)
+                            chunk_end = seg_start + (min(idx + 3, len(clean_words)) * word_dur)
+                            timed_words.append((chunk_start, chunk_end, chunk_text))
+                else:
+                    raw_words = ["CREATE", "VIRAL", "CONTENT", "AUTONOMOUSLY", "WITH", "CREATORBUDDY"]
+                    clean_words = [w.upper() for w in raw_words]
+                    word_dur = total_duration / len(clean_words)
+                    for idx in range(0, len(clean_words), 3):
+                        chunk = clean_words[idx : idx + 3]
+                        chunk_text = " ".join(chunk)
+                        chunk_start = idx * word_dur
+                        chunk_end = min(idx + 3, len(clean_words)) * word_dur
+                        timed_words.append((chunk_start, chunk_end, chunk_text))
 
-            def process_frame(frame, t):
-                img_pil = Image.fromarray(frame).convert("RGBA")
-                draw = ImageDraw.Draw(img_pil)
-                w, h = 720, 1280
-                
-                is_cta_phase = (t >= total_duration - 3.0)
-                
-                if not is_cta_phase and timed_words:
-                    active_word = ""
-                    for w_start, w_end, w_text in timed_words:
-                        if w_start <= t < w_end:
-                            active_word = w_text
-                            break
-                    if not active_word:
-                        closest_w = timed_words[0][2]
-                        min_dist = abs(t - timed_words[0][0])
+            if timed_words:
+                try:
+                    from moviepy import TextClip, CompositeVideoClip
+                    test_clip = TextClip(text="test", font="arial.ttf", font_size=20, color="white")
+                    test_clip.close()
+                    use_textclip_composite = True
+                except Exception:
+                    use_textclip_composite = False
+
+            if use_textclip_composite:
+                try:
+                    from moviepy import TextClip, CompositeVideoClip
+                    for start_t, end_t, text in timed_words:
+                        t_clip = TextClip(
+                            text=text,
+                            font="arial.ttf",
+                            font_size=50,
+                            color="#ffd25a",
+                            stroke_color="black",
+                            stroke_width=3,
+                            margin=(20, 20)
+                        )
+                        if hasattr(t_clip, "with_start"):
+                            t_clip = t_clip.with_start(start_t).with_end(end_t).with_position(("center", 1040))
+                        else:
+                            t_clip = t_clip.set_start(start_t).set_end(end_t).set_position(("center", 1040))
+                        text_clips.append(t_clip)
+                    
+                    video_sequence = CompositeVideoClip([video_sequence] + text_clips)
+                except Exception as e:
+                    logger.error(f"TextClip composition failed: {e}. Falling back to PIL rendering.")
+                    use_textclip_composite = False
+
+            if not use_textclip_composite:
+                def draw_text_with_outline(draw_ctx, text, x, y, font, fill_color, outline_color=(17, 17, 17, 255), outline_width=3):
+                    for dx in range(-outline_width, outline_width+1):
+                        for dy in range(-outline_width, outline_width+1):
+                            if dx != 0 or dy != 0:
+                                draw_ctx.text((x + dx, y + dy), text, fill=outline_color, font=font, anchor="mm")
+                    draw_ctx.text((x, y), text, fill=fill_color, font=font, anchor="mm")
+
+                def process_frame(frame, t):
+                    img_pil = Image.fromarray(frame).convert("RGBA")
+                    draw = ImageDraw.Draw(img_pil)
+                    w, h = 720, 1280
+                    
+                    is_cta_phase = (t >= total_duration - 3.0)
+                    
+                    if not is_cta_phase and timed_words:
+                        active_word = ""
                         for w_start, w_end, w_text in timed_words:
-                            dist = abs(t - w_start)
-                            if dist < min_dist:
-                                min_dist = dist
-                                closest_w = w_text
-                        active_word = closest_w
-                    
-                    try:
-                        sub_font = ImageFont.truetype("arial.ttf", size=65)
-                    except OSError:
-                        sub_font = ImageFont.load_default()
+                            if w_start <= t < w_end:
+                                active_word = w_text
+                                break
+                        if not active_word:
+                            closest_w = ""
+                            min_dist = 999.0
+                            for w_start, w_end, w_text in timed_words:
+                                dist = min(abs(t - w_start), abs(t - w_end))
+                                if dist < min_dist:
+                                    min_dist = dist
+                                    closest_w = w_text
+                            if min_dist < 0.25:
+                                active_word = closest_w
                         
-                    draw_text_with_outline(draw, active_word, w // 2, h - 240, sub_font, (255, 210, 90, 255))
-                    
-                if is_cta_phase:
-                    overlay = Image.new("RGBA", (w, h), (0, 0, 0, 0))
-                    overlay_draw = ImageDraw.Draw(overlay)
-                    
-                    cx1, cy1, cx2, cy2 = 100, 480, 620, 840
-                    overlay_draw.rounded_rectangle(
-                        [(cx1, cy1), (cx2, cy2)], 
-                        radius=20, 
-                        fill=(17, 17, 17, 225), 
-                        outline=(255, 210, 90, 255), 
-                        width=4
-                    )
-                    
-                    try:
-                        title_font = ImageFont.truetype("arial.ttf", size=32)
-                        body_font = ImageFont.truetype("arial.ttf", size=24)
-                    except OSError:
-                        title_font = ImageFont.load_default()
-                        body_font = ImageFont.load_default()
+                        try:
+                            sub_font = ImageFont.truetype("arial.ttf", size=50)
+                        except OSError:
+                            sub_font = ImageFont.load_default()
+                            
+                        draw_text_with_outline(draw, active_word, w // 2, h - 240, sub_font, (255, 210, 90, 255))
                         
-                    draw_text_with_outline(overlay_draw, "CREATORBUDDY AI", w // 2, cy1 + 60, title_font, (255, 91, 132, 255))
-                    draw_text_with_outline(overlay_draw, "⚡ LAUNCH SUCCESS ⚡", w // 2, cy1 + 130, body_font, (255, 255, 255, 255))
-                    draw_text_with_outline(overlay_draw, "COMMENT 'RECHARGE'", w // 2, cy1 + 220, title_font, (255, 210, 90, 255))
-                    draw_text_with_outline(overlay_draw, "TO ACCESS BLUEPRINT!", w // 2, cy1 + 290, body_font, (255, 255, 255, 255))
+                    if is_cta_phase:
+                        overlay = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+                        overlay_draw = ImageDraw.Draw(overlay)
+                        
+                        cx1, cy1, cx2, cy2 = 100, 480, 620, 840
+                        overlay_draw.rounded_rectangle(
+                            [(cx1, cy1), (cx2, cy2)], 
+                            radius=20, 
+                            fill=(17, 17, 17, 225), 
+                            outline=(255, 210, 90, 255), 
+                            width=4
+                        )
+                        
+                        try:
+                            title_font = ImageFont.truetype("arial.ttf", size=32)
+                            body_font = ImageFont.truetype("arial.ttf", size=24)
+                        except OSError:
+                            title_font = ImageFont.load_default()
+                            body_font = ImageFont.load_default()
+                            
+                        draw_text_with_outline(overlay_draw, "CREATORBUDDY AI", w // 2, cy1 + 60, title_font, (255, 91, 132, 255))
+                        draw_text_with_outline(overlay_draw, "⚡ LAUNCH SUCCESS ⚡", w // 2, cy1 + 130, body_font, (255, 255, 255, 255))
+                        draw_text_with_outline(overlay_draw, "COMMENT 'RECHARGE'", w // 2, cy1 + 220, title_font, (255, 210, 90, 255))
+                        draw_text_with_outline(overlay_draw, "TO ACCESS BLUEPRINT!", w // 2, cy1 + 290, body_font, (255, 255, 255, 255))
+                        
+                        img_pil = Image.alpha_composite(img_pil, overlay)
+                        
+                    return np.array(img_pil.convert("RGB"))
                     
-                    img_pil = Image.alpha_composite(img_pil, overlay)
-                    
-                return np.array(img_pil.convert("RGB"))
-                
-            video_sequence = video_sequence.transform(lambda gf, t: process_frame(gf(t), t))
+                video_sequence = video_sequence.transform(lambda gf, t: process_frame(gf(t), t))
+
             final_video = video_sequence.with_audio(audio_clip)
             final_video.write_videofile(
                 output_mp4_path,
@@ -376,10 +508,23 @@ class MediaProductionFactory:
             
         finally:
             if audio_clip:
-                audio_clip.close()
+                try:
+                    audio_clip.close()
+                except Exception:
+                    pass
             for c in clips:
                 try:
                     c.close()
+                except Exception:
+                    pass
+            for tc in text_clips:
+                try:
+                    tc.close()
+                except Exception:
+                    pass
+            if video_sequence:
+                try:
+                    video_sequence.close()
                 except Exception:
                     pass
             if final_video:
